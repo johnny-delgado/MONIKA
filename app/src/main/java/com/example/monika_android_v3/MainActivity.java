@@ -2,6 +2,11 @@ package com.example.monika_android_v3;
 
 import android.content.ContentResolver;
 import android.database.Cursor;
+import android.media.AudioManager;
+import android.media.MediaPlayer;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
+import android.media.ToneGenerator;
 import android.net.Uri;
 import android.os.Bundle;
 import android.support.design.widget.FloatingActionButton;
@@ -50,6 +55,8 @@ import 	java.io.StringReader;
 //query phone contacts
 import android.provider.ContactsContract;
 import android.provider.ContactsContract.PhoneLookup;
+
+import android.media.ToneGenerator;
 
 
 
@@ -137,8 +144,12 @@ public class MainActivity extends AppCompatActivity
             @Override
             public void onClick(View v) {
 
+                clearContactList();
+
+
+
                 //send test text
-                sendMsg ("9413437452", busyReason);
+                //sendMsg ("9413437452", busyReason);
                 //works: 160
                 //too long: 161
 
@@ -344,6 +355,7 @@ public class MainActivity extends AppCompatActivity
     }
 
 
+    //add new number to monika's contact list if it's in the phone's contacts list
     protected void appendContactList(String newNumber){
 
         Long timeStampLong = System.currentTimeMillis()/1000;
@@ -358,13 +370,18 @@ public class MainActivity extends AppCompatActivity
 
 
             String newContactList = readContactList() +
-                    fullName + "," + newNumber + "," + firstName + "," + "20" + "," + timeStamp;
+                    fullName + "," + newNumber + "," + firstName + "," + "20" + "," + timeStamp + "," + "Null";
             /* Each contact line has the following information:
              * 0 - full name
              * 1 - phone number
              * 2 - name Monika calls them
              * 3 - trust level
              * 4 - time of last text (in seconds since the epoch - System.currentTimeMillis()/1000)
+             * 5 - current state
+                * Null - the value put in when the contact is first added to the list and when the prior conversation is older than an alotted time
+                * Started - already sent "hi is this important" text
+                * Alerted - already sent me an emergency or important alert
+                * Ended - monika already said goodbye in response to the user bidding her farewell
              */
 
 
@@ -453,43 +470,194 @@ public class MainActivity extends AppCompatActivity
 
             Long timeStampLong = System.currentTimeMillis()/1000;
             String timeStamp = timeStampLong.toString();
-            if (getTimestamp(senderNumber) < Integer.parseInt(timeStamp) - 60 * 20) { //if the last text this sender sent was longer than a 20 minutes ago (the timestamp is recorded in seconds so it's * 60)
 
+
+            //if the last text this sender sent was longer than a 20 minutes ago, mark it as null (the timestamp is recorded in seconds so it's * 60)
+            if (getTimestamp(senderNumber) < Integer.parseInt(timeStamp) - 60 * 20) {
+                setConversationState(senderNumber, "Null");
+            }
+
+
+            //if this is the first sentence of a new conversation
+            if (getConversationState(senderNumber).equals("Null")) {
                 setTimestamp(senderNumber);
 
                 int trust = getTrust(senderNumber);
 
+                setConversationState(senderNumber, "Started");
 
                 //first sentence to someone who's just texted that monika already knows
                 if (trust >= 70) {
-                    return "Hey " + getFirstName(senderNumber) + "! Monika here! I'm really sorry but Johnny's " + busyReason + " right now. Hopefully he'll get back to you as soon as he's free.\n-Monika";
+                    return "Hey " + getFirstName(senderNumber) + "! Monika here! I'm really sorry but Johnny's " + busyReason + " right now. Hopefully he'll get back to you as soon as he's free. Although if you want to get a hold of him sooner, just let me know and I'll try to contact him for you. Is this time sensitive?\n-Monika";
                 } else if (trust >= 20) {
-                    return "Hello again " + getFirstName(senderNumber) + ", it's Monika. Unfortunately Johnny's " + busyReason + " right now.\n-Monika";
+                    return "Hello again " + getFirstName(senderNumber) + ", it's Monika. Unfortunately Johnny's " + busyReason + " right now. If you need, I can try to get his attention now. Is this time sensitive?\n-Monika";
                 } else if (trust >= -20) {
                     return "Hello, this is Monika. Johnny is " + busyReason + " right now so he won't be able to respond.\n-Monika";
                 } else {
                     return "This is Johnny's digital assistant. He can't respond at the moment.\n-Monika";
                 }
 
-            } else { //if a text was sent within 20 minutes after monika's first response, check if it was an afermative to the emergency question
-                return ""; //don't respond to texts that were sent so soon after the last response
+            }
+
+            //if a text was sent within 20 minutes after monika's first response, and johnny hasn't been alerted yet, check for emergency or important
+            if (getConversationState(senderNumber).equals("Started")) {
+                setTimestamp(senderNumber);
+
+                if (isTimeSensitive(senderMessage)){
+                    timeSensitiveAlert();
+                    //return "Yikes, good luck with that.\n-Monika";
+                    int trust = getTrust(senderNumber);
+
+                    setConversationState(senderNumber, "Alerted");
+
+                    //informing that the time sensitive alert has been sent
+                    if (trust >= 70) {
+                        return "Okay, I did my best trying to let him know! I really hope he heard me.\n-Monika";
+                    } else if (trust >= 20) {
+                        return "I just let him know, hopefully he heard me.\n-Monika";
+                    } else if (trust >= -20) {
+                        return "Johnny has been alerted.\n-Monika";
+                    } else {
+                        return "Your alert has been sent. Goodbye.\n-Monika";
+                    }
+
+                }
+
+                //if is emergency goes here
+
+
             }
 
 
+            //check if the user is saying goodbye here and if so, return a goodbye message
+
+
+
+            return "";
 
 
         } else { //if the number isn't in monika's contact list
             appendContactList(senderNumber); //add new number to monika's contact list if it's in the phone's contacts list
             if (contactsChecker(senderNumber)) { //if the number is now in monika's contact list (meaning it's the first time monika will speak to them but i know them already)
-                return "Hi " + getFirstName(senderNumber) + "! I'm Monika, Johnny's digital assistant. It's very nice to meet you! Unfortunately Johnny's " + busyReason + " right now.\n-Monika";
+                setTimestamp(senderNumber);
+                setConversationState(senderNumber, "Started");
+                return "Hi " + getFirstName(senderNumber) + "! I'm Monika, Johnny's digital assistant. It's very nice to meet you! Unfortunately Johnny's " + busyReason + " right now. If you need, I can try to get his attention. Is your message time sensitive?\n-Monika";
             } else { //if the number wasn't in my phone contacts list
-                return""; //don't send a response
+                return ""; //don't send a response
             }
         }
+    }
 
 
+    //check if it was an affirmative to the emergency question
+    protected boolean isTimeSensitive(String senderMessage){
 
-        //return "So sorry! Johnny is " + busyReason + " right now.\n-Monika";
+        String[] affirmativeWords = new String[] {"yes", "yup", "correct", "now", "ye", "now", "hurry"};
+
+        String modifiedMessage = senderMessage.replaceAll("[^a-zA-Z ]", "").toLowerCase();
+
+        String[] words = modifiedMessage.split("\\s+");
+        for (String word: words) {
+            for (String affirmativeWord: affirmativeWords) {
+                if (word.equals(affirmativeWord)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+
+    }
+
+
+    //check if it was an affirmative to the emergency question
+    protected boolean isEmergency(String senderMessage){
+
+        String[] affirmativeWords = new String[] {"emergency", "hospital", "dying", "dead", "police"};
+
+        String modifiedMessage = senderMessage.replaceAll("[^a-zA-Z ]", "").toLowerCase();
+
+        String[] words = modifiedMessage.split("\\s+");
+        for (String word: words) {
+            for (String affirmativeWord: affirmativeWords) {
+                if (word.equals(affirmativeWord)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+
+    }
+
+    //plays beep if the ringtone volume isn't on silent
+    protected void timeSensitiveAlert() {
+
+        //get current ringtone volume (https://stackoverflow.com/questions/4593552/how-do-you-get-set-media-volume-not-ringtone-volume-in-android)
+        AudioManager audio = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        int ringtoneVolume = audio.getStreamVolume(AudioManager.STREAM_RING);
+
+        //Toast toast = Toast.makeText(getApplicationContext(), "ringtone: " + ringtoneVolume, Toast.LENGTH_SHORT);
+        //toast.show();
+
+        if (ringtoneVolume >= 1){ //if the ringtone isn't set to silent or vibrate
+
+            //the initial music volume
+            int musicVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+
+            //set music volume to max
+            int maxVolume = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, AudioManager.FLAG_PLAY_SOUND);
+
+            //play beep
+            int streamType = AudioManager.STREAM_MUSIC;
+            ToneGenerator beep = new ToneGenerator(streamType, 45);
+            int beepDuration = 1000; //milliseconds
+            beep.startTone(ToneGenerator.TONE_CDMA_HIGH_L, beepDuration);
+
+            //wait until the tone is done playing before proceeding
+            try
+            {
+                Thread.sleep(beepDuration);
+            }
+            catch(InterruptedException ex)
+            {
+                Thread.currentThread().interrupt();
+            }
+
+            //turn music volume back down to it's initial value
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC, musicVolume, AudioManager.FLAG_PLAY_SOUND);
+        }
+    }
+
+    //plays loud long beep no matter what
+    protected void emergencyAlert() {
+        AudioManager audio = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+
+        //the initial music volume
+        int musicVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+
+        //set music volume to max
+        int maxVolume = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, AudioManager.FLAG_PLAY_SOUND);
+
+        //play beep
+        int streamType = AudioManager.STREAM_MUSIC;
+        ToneGenerator beep = new ToneGenerator(streamType, 100);
+        int beepDuration = 5000; //milliseconds
+        beep.startTone(ToneGenerator.TONE_CDMA_HIGH_L, beepDuration);
+
+        //wait until the tone is done playing before proceeding
+        try
+        {
+            Thread.sleep(beepDuration);
+        }
+        catch(InterruptedException ex)
+        {
+            Thread.currentThread().interrupt();
+        }
+
+        //turn music volume back down to it's initial value
+        audio.setStreamVolume(AudioManager.STREAM_MUSIC, musicVolume, AudioManager.FLAG_PLAY_SOUND);
+
     }
 
     protected void setDisplayReason() {
@@ -591,6 +759,30 @@ public class MainActivity extends AppCompatActivity
         return Integer.parseInt(timeStamp);
     }
 
+    protected void setConversationState(String senderNumber, String newState) {
+        List<List<String>> contactList = convertContactList();
+        if (contactsChecker(senderNumber)) { //ensure that the number exists in the contact list
+            for (int contactNumber = 0; contactNumber < contactList.size(); contactNumber++) {
+                if (contactList.get(contactNumber).get(1).equals(senderNumber)) {
+                    contactList.get(contactNumber).set(5, newState);
+                }
+            }
+        }
+        setContactList(contactList);
+    }
+
+    protected String getConversationState(String senderNumber) {
+        List<List<String>> contactList = convertContactList();
+        String conversationState = "";
+        if (contactsChecker(senderNumber)) { //ensure that the number exists in the contact list
+            for (int contactNumber = 0; contactNumber < contactList.size(); contactNumber++) {
+                if (contactList.get(contactNumber).get(1).equals(senderNumber)) {
+                    conversationState = contactList.get(contactNumber).get(5);
+                }
+            }
+        }
+        return conversationState;
+    }
 
     protected String getPhoneContactName(String senderNumber) {
         Uri lookupUri = Uri.withAppendedPath(
@@ -634,20 +826,6 @@ public class MainActivity extends AppCompatActivity
     //****************************************************************
     //I HAVE TO MODIFY THE apendContactList SO IT DOESN'T USE THE OLD readContactList!!!!!!!
     //****************************************************************
-
-
-
-
-
-
-    //turns off the receiver when the app is paused (not running in foreground)
-    //I don't want this in the final code so Monika can run in the background
-    /*@Override
-    protected void onPause() {
-        //unregister the receiver
-        unregisterReceiver(intentReceiver);
-        super.onPause();
-    }*/
 
 
 }
